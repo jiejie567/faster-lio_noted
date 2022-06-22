@@ -49,8 +49,10 @@ class LaserMapping {
 
     // sync lidar with imu
     bool SyncPackages();
+    bool SyncPackagesRGBD();
 
-    /// interface of mtk, customized obseravtion model
+
+        /// interface of mtk, customized obseravtion model
     void ObsModel(state_ikfom &s, esekfom::dyn_share_datastruct<double> &ekfom_data);
 
     ////////////////////////////// debug save / show ////////////////////////////////////////////////////////////////

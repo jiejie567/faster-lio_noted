@@ -55,7 +55,7 @@ POINT_CLOUD_REGISTER_POINT_STRUCT(ouster_ros::Point,
 
 namespace faster_lio {
 
-enum class LidarType { AVIA = 1, VELO32, OUST64 };
+enum class LidarType { AVIA = 1, VELO32, OUST64, TOF_RGBD, STRUCTURELIGHT_RGBD };
 
 /**
  * point cloud preprocess
@@ -75,6 +75,8 @@ class PointCloudPreprocess {
 
     // accessors
     double &Blind() { return blind_; }
+    double &Max_distance() { return max_distance_; }
+
     int &NumScans() { return num_scans_; }
     int &PointFilterNum() { return point_filter_num_; }
     bool &FeatureEnabled() { return feature_enabled_; }
@@ -86,6 +88,7 @@ class PointCloudPreprocess {
     void AviaHandler(const livox_ros_driver::CustomMsg::ConstPtr &msg);
     void Oust64Handler(const sensor_msgs::PointCloud2::ConstPtr &msg);
     void VelodyneHandler(const sensor_msgs::PointCloud2::ConstPtr &msg);
+    void RGBDHandler(const sensor_msgs::PointCloud2::ConstPtr &msg);
 
     PointCloudType cloud_full_, cloud_out_;
 
@@ -94,6 +97,7 @@ class PointCloudPreprocess {
     int point_filter_num_ = 1;
     int num_scans_ = 6;
     double blind_ = 0.01;
+    double max_distance_ = 9.0;
     float time_scale_ = 1e-3;
     bool given_offset_time_ = false;
 };

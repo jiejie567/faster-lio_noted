@@ -82,6 +82,7 @@ bool LaserMapping::LoadParams(ros::NodeHandle &nh) {
     nh.param<double>("mapping/b_gyr_cov", b_gyr_cov, 0.0001);
     nh.param<double>("mapping/b_acc_cov", b_acc_cov, 0.0001);
     nh.param<double>("preprocess/blind", preprocess_->Blind(), 0.01);
+    nh.param<double>("preprocess/max_distance", preprocess_->Max_distance(), 200.0);
     nh.param<float>("preprocess/time_scale", preprocess_->TimeScale(), 1e-3);
     nh.param<int>("preprocess/lidar_type", lidar_type, 1);
     nh.param<int>("preprocess/scan_line", preprocess_->NumScans(), 16);
@@ -107,6 +108,12 @@ bool LaserMapping::LoadParams(ros::NodeHandle &nh) {
     } else if (lidar_type == 3) {
         preprocess_->SetLidarType(LidarType::OUST64);
         LOG(INFO) << "Using OUST 64 Lidar";
+    } else if (lidar_type == 4) {
+        preprocess_->SetLidarType(LidarType::TOF_RGBD);
+        LOG(INFO) << "Using ToF RGB-D camera";
+    } else if (lidar_type == 5) {
+        preprocess_->SetLidarType(LidarType::STRUCTURELIGHT_RGBD);
+        LOG(INFO) << "Using structure light RGB-D camera";
     } else {
         LOG(WARNING) << "unknown lidar_type";
         return false;
@@ -267,9 +274,14 @@ LaserMapping::LaserMapping() {
 
 void LaserMapping::Run() {
     // 根据时间戳对齐首个传感器消息
+    if(preprocess_->GetLidarType()==LidarType::TOF_RGBD||preprocess_->GetLidarType()==LidarType::STRUCTURELIGHT_RGBD){
+        if (!SyncPackagesRGBD()) {
+            return;
+        }
+    }else{
     if (!SyncPackages()) {
         return;
-    }
+    }}
 
     /// IMU process, kf prediction, undistortion
     // 利用imu测量进行状态预测
@@ -458,8 +470,8 @@ bool LaserMapping::SyncPackages() {
         // 如果最后一个点的时间偏移不足0.5 * lidar_mean_scantime_，说明雷达还没正常启动
         } else if (measures_.lidar_->points.back().curvature / double(1000) < 0.5 * lidar_mean_scantime_) {
             lidar_end_time_ = measures_.lidar_bag_time_ + lidar_mean_scantime_;
-        // 下面即正常启动，记录测量的结束时间
-        } else {
+//        // 下面即正常启动，记录测量的结束时间
+        }else{
             scan_num_++;
             // 该帧的结束时间戳
             lidar_end_time_ = measures_.lidar_bag_time_ + measures_.lidar_->points.back().curvature / double(1000);
@@ -493,6 +505,50 @@ bool LaserMapping::SyncPackages() {
     lidar_pushed_ = false;
     return true;
 }
+bool LaserMapping::SyncPackagesRGBD() {
+        // 检测雷达和imu的缓存是否有效，如果没有的话则取消处理
+        if (lidar_buffer_.size()<2 || imu_buffer_.empty()) {
+            return false;
+        }
+
+        /*** push a lidar scan ***/
+        // 这里的lidar_end_time_很重要，由于fast_lio中的主要贡献之一是back-propagation
+        // 最后的结果是将一帧点云的所有点都校正到这一帧扫描结束的位置，该位置对应的时间就是lidar_end_time_
+        if (!lidar_pushed_) {
+            // 第一个雷达测量
+            measures_.lidar_ = lidar_buffer_.front();
+            // 第一个雷达测量的时间戳
+            measures_.lidar_bag_time_ = time_buffer_.front();
+            lidar_end_time_ = time_buffer_.at(1);
+            // 一帧点云的点数要大于1才算有效
+            if (measures_.lidar_->points.size() <= 1) {
+                LOG(WARNING) << "Too few input point cloud!";
+            }
+            measures_.lidar_end_time_ = lidar_end_time_;
+            lidar_pushed_ = true;
+        }
+
+        if (last_timestamp_imu_ < lidar_end_time_) {
+            return false;
+        }
+
+        /*** push imu_ data, and pop from imu_ buffer ***/
+        // 获取队首的imu时间戳
+        double imu_time = imu_buffer_.front()->header.stamp.toSec();
+        measures_.imu_.clear();
+        // 让lidar和imu测量的时间戳对齐，这里一般要求imu的测量频率远高于lidar
+        while ((!imu_buffer_.empty()) && (imu_time < lidar_end_time_)) {
+            imu_time = imu_buffer_.front()->header.stamp.toSec();
+            if (imu_time > lidar_end_time_) break;
+            measures_.imu_.push_back(imu_buffer_.front());
+            imu_buffer_.pop_front();
+        }
+
+        lidar_buffer_.pop_front();
+        time_buffer_.pop_front();
+        lidar_pushed_ = false;
+        return true;
+    }
 
 void LaserMapping::PrintState(const state_ikfom &s) {
     LOG(INFO) << "state r: " << s.rot.coeffs().transpose() << ", t: " << s.pos.transpose()

@@ -26,7 +26,12 @@ void PointCloudPreprocess::Process(const sensor_msgs::PointCloud2::ConstPtr &msg
         case LidarType::VELO32:
             VelodyneHandler(msg);
             break;
-
+        case LidarType::TOF_RGBD:
+            RGBDHandler(msg);
+            break;
+        case LidarType::STRUCTURELIGHT_RGBD:
+            RGBDHandler(msg);
+            break;
         default:
             LOG(ERROR) << "Error LiDAR Type";
             break;
@@ -56,7 +61,7 @@ void PointCloudPreprocess::AviaHandler(const livox_ros_driver::CustomMsg::ConstP
     std::for_each(std::execution::par_unseq, index.begin(), index.end(), [&](const uint &i) {
         if ((msg->points[i].line < num_scans_) &&
             ((msg->points[i].tag & 0x30) == 0x10 || (msg->points[i].tag & 0x30) == 0x00)) {
-            if (i % point_filter_num_ == 0) { // point_filter_num_ = 1
+            if (i % point_filter_num_ == 0) {  // point_filter_num_ = 1
                 cloud_full_[i].x = msg->points[i].x;
                 cloud_full_[i].y = msg->points[i].y;
                 cloud_full_[i].z = msg->points[i].z;
@@ -70,7 +75,7 @@ void PointCloudPreprocess::AviaHandler(const livox_ros_driver::CustomMsg::ConstP
                     (abs(cloud_full_[i].z - cloud_full_[i - 1].z) > 1e-7) &&
                         (cloud_full_[i].x * cloud_full_[i].x + cloud_full_[i].y * cloud_full_[i].y +
                              cloud_full_[i].z * cloud_full_[i].z >
-                         (blind_ * blind_))) { // 点的深度要大于盲区距离才算有效
+                         (blind_ * blind_))) {  // 点的深度要大于盲区距离才算有效
                     is_valid_pt[i] = true;
                 }
             }
@@ -79,7 +84,7 @@ void PointCloudPreprocess::AviaHandler(const livox_ros_driver::CustomMsg::ConstP
 
     for (uint i = 1; i < plsize; i++) {
         if (is_valid_pt[i]) {
-            cloud_out_.points.push_back(cloud_full_[i]); // 将有效点压入cloud_out_
+            cloud_out_.points.push_back(cloud_full_[i]);  // 将有效点压入cloud_out_
         }
     }
 }
@@ -192,5 +197,56 @@ void PointCloudPreprocess::VelodyneHandler(const sensor_msgs::PointCloud2::Const
         }
     }
 }
+
+void PointCloudPreprocess::RGBDHandler(const sensor_msgs::PointCloud2::ConstPtr &msg) {
+        cloud_out_.clear();
+        cloud_full_.clear();
+        // 点云大小
+        pcl::PointCloud<pcl::PointXYZRGB> pl_orig;
+        pcl::fromROSMsg(*msg, pl_orig);
+        int plsize = pl_orig.points.size();
+
+        // 给点云容器预留空间
+        cloud_out_.reserve(plsize);
+        cloud_full_.resize(plsize);
+
+        // 点云有效性标签
+        std::vector<bool> is_valid_pt(plsize, false);
+        // 点云索引
+        std::vector<uint> index(plsize - 1);
+        for (uint i = 0; i < plsize - 1; ++i) {
+            index[i] = i + 1;  // 从1开始
+        }
+
+        // 并行处理
+        std::for_each(std::execution::par_unseq, index.begin(), index.end(), [&](const uint &i) {
+            if (i % point_filter_num_ == 0) {  // point_filter_num_ = 1
+                    cloud_full_[i].x = pl_orig.points[i].x;
+                    cloud_full_[i].y = pl_orig.points[i].y;
+                    cloud_full_[i].z = pl_orig.points[i].z;
+                    cloud_full_[i].intensity = pl_orig.points[i].r;//TODO: 先用红色代替下
+                    cloud_full_[i].curvature = 0;// use curvature as time of each laser points, curvature unit: ms
+
+                    if ((abs(cloud_full_[i].x - cloud_full_[i - 1].x) > 1e-7) ||
+                        (abs(cloud_full_[i].y - cloud_full_[i - 1].y) > 1e-7) ||
+                        (abs(cloud_full_[i].z - cloud_full_[i - 1].z) > 1e-7) &&
+                        (cloud_full_[i].x * cloud_full_[i].x + cloud_full_[i].y * cloud_full_[i].y +
+                         cloud_full_[i].z * cloud_full_[i].z >
+                         (blind_ * blind_))&&
+                        (cloud_full_[i].x * cloud_full_[i].x + cloud_full_[i].y * cloud_full_[i].y +
+                         cloud_full_[i].z * cloud_full_[i].z <
+                         (max_distance_ * max_distance_))) {  // 点的深度要大于盲区距离 小于最远距离才算有效
+                        is_valid_pt[i] = true;
+                    }
+                }
+            }
+        );
+
+        for (uint i = 1; i < plsize; i++) {
+            if (is_valid_pt[i]) {
+                cloud_out_.points.push_back(cloud_full_[i]);  // 将有效点压入cloud_out_
+            }
+        }
+    }
 
 }  // namespace faster_lio
